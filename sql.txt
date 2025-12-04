@@ -1,0 +1,13 @@
+#創建資料庫
+CREATE DATABASE mydb;
+-----------------------
+#創建資料表
+USE mydb;
+CREATE TABLE fact_check_cache (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    claim_text TEXT NOT NULL,
+    claimant VARCHAR(255),
+    rating VARCHAR(100) NOT NULL,
+    url VARCHAR(2083),
+    retrieved_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+); 
