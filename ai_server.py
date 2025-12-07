@@ -11,7 +11,6 @@ app = FastAPI()
 
 # --- 1. 載入模型 ---
 print("正在載入 Deepfake 偵測模型與人臉辨識工具...")
-# 使用針對 Deepfake/Face Swap 的模型
 model_name = "dima806/deepfake_vs_real_image_detection"
 detector = pipeline("image-classification", model=model_name)
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
@@ -35,7 +34,7 @@ def predict_image(image: Image.Image):
     # 轉 OpenCV 格式
     img_np = np.array(image)
     if len(img_np.shape) == 2:
-        img_np = cv2.cvtColor(img_np, cv2.COLOR_GRAY2RGB) 
+        img_np = cv2.cvtColor(img_np, cv2.COLOR_GRAY2RGB)
     open_cv_image = img_np[:, :, ::-1].copy()
     gray = cv2.cvtColor(open_cv_image, cv2.COLOR_BGR2GRAY)
 
@@ -67,12 +66,12 @@ async def detect_image_endpoint(file: UploadFile = File(...)):
         image_data = await file.read()
         image = Image.open(io.BytesIO(image_data)).convert("RGB")
         
-        # 取得是 Deepfake 的機率 (0.0 ~ 1.0)
+        # 統一回傳 fake_probability
         prob = predict_image(image)
         
         return {
             "status": "success",
-            "fake_probability": prob  # 統一回傳這個欄位
+            "fake_probability": prob 
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}
@@ -80,6 +79,7 @@ async def detect_image_endpoint(file: UploadFile = File(...)):
 # --- API: 影片偵測 ---
 @app.post("/detect/video")
 async def detect_video_endpoint(file: UploadFile = File(...)):
+    # 修復路徑錯誤：只取檔名
     safe_filename = os.path.basename(file.filename)
     temp_filename = f"temp_{safe_filename}"
     try:
@@ -91,7 +91,7 @@ async def detect_video_endpoint(file: UploadFile = File(...)):
 
         fps = cap.get(cv2.CAP_PROP_FPS)
         if fps == 0: fps = 24
-        frame_interval = int(fps) # 每秒抽一張
+        frame_interval = int(fps) 
         
         ai_frames = 0
         total_frames_checked = 0
@@ -100,16 +100,15 @@ async def detect_video_endpoint(file: UploadFile = File(...)):
             ret, frame = cap.read()
             if not ret: break
             
-            if total_frames_checked >= 60: break # 最多檢查 60 張以免超時
+            if total_frames_checked >= 60: break
 
-            # 依間隔抽樣
             if cap.get(cv2.CAP_PROP_POS_FRAMES) % frame_interval == 0:
                 rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 pil_image = Image.fromarray(rgb_frame)
                 prob = predict_image(pil_image)
                 
                 total_frames_checked += 1
-                if prob > 0.5: # 單張判定門檻
+                if prob > 0.5:
                     ai_frames += 1
 
         cap.release()
