@@ -103,6 +103,8 @@ function check_url_existence(string $url): bool { $ch = curl_init($url); curl_se
 function check_url_safety(string $url, string $apiKey): array { $queryParams = http_build_query(['key' => $apiKey, 'uri' => $url]); $threatTypes = ['MALWARE', 'SOCIAL_ENGINEERING', 'UNWANTED_SOFTWARE']; foreach ($threatTypes as $type) { $queryParams .= '&threatTypes=' . urlencode($type); } $apiUrl = 'https://webrisk.googleapis.com/v1/uris:search?' . $queryParams; $response = make_curl_request($apiUrl); if ($response === false) { return ['error' => '無法連接至 Google Web Risk API。']; } $data = json_decode($response, true); if (isset($data['error'])) { return ['error' => $data['error']['message']]; } if (isset($data['threat'])) { return ['safe' => false, 'threat_type' => $data['threat']['threatTypes'][0] ?? 'UNKNOWN']; } return ['safe' => true]; }
 function format_probability(float $prob): string { $percentage = round($prob * 100); if ($percentage > 75) return "🚨 高風險 ({$percentage}%)"; if ($percentage > 40) return "⚠️ 中風險 ({$percentage}%)"; return "✅ 低風險 ({$percentage}%)"; }
 
+// --- 這裡開始是修正後的兩個處理函式 ---
+
 function handle_image_analysis_response(string|false $apiResponse, string $targetId, LINEBot $bot): void {
     if ($apiResponse === false) {
         $bot->pushMessage($targetId, new TextMessageBuilder("抱歉，圖片偵測服務暫時無法連線。"));
@@ -116,16 +118,25 @@ function handle_image_analysis_response(string|false $apiResponse, string $targe
     }
 
     $ai_detection_message = "🖼️ AI 圖片分析結果：\n\n";
-    $aiData = $data['ai_detection'] ?? null;
-    if (!$aiData || isset($aiData['error'])) {
-        $ai_detection_message .= "AI 生成偵測失敗: " . ($aiData['error'] ?? '未知錯誤');
-    } elseif (isset($aiData['status']) && $aiData['status'] === 'success') {
-        $result = $aiData['result'];
-        $confidence = round($result['confidence'] * 100);
-        if (strtolower($result['label']) === 'ai/deepfake' || strtolower($result['label']) === 'ai') {
-            $ai_detection_message .= "判斷結果：AI 生成 🤖\n(有 {$confidence}% 的機率是由 AI 生成)";
+    
+    // [修正] 讀取新的 fake_probability 欄位
+    if (isset($data['fake_probability'])) {
+        $fakeProb = $data['fake_probability'];
+        $confidence = round($fakeProb * 100, 1);
+        
+        if ($fakeProb > 0.5) {
+            $ai_detection_message .= "⚠️ 判斷為：AI生成/Deepfake\n(合成可能性：{$confidence}%)\n";
         } else {
-            $ai_detection_message .= "判斷結果：真人創作 ✅\n(有 {$confidence}% 的機率為真人創作)";
+            $ai_detection_message .= "✅ 判斷為：真實影像\n(合成可能性僅 {$confidence}%)\n";
+        }
+    } elseif (isset($data['ai_detection']['fake_probability'])) {
+        // 相容不同層級
+        $fakeProb = $data['ai_detection']['fake_probability'];
+        $confidence = round($fakeProb * 100, 1);
+        if ($fakeProb > 0.5) {
+            $ai_detection_message .= "⚠️ 判斷為：AI生成/Deepfake\n(合成可能性：{$confidence}%)\n";
+        } else {
+            $ai_detection_message .= "✅ 判斷為：真實影像\n(合成可能性僅 {$confidence}%)\n";
         }
     } else {
         $ai_detection_message .= "分析圖片 AI 生成可能性時發生未知錯誤。";
@@ -177,10 +188,10 @@ function handle_video_analysis_response(string|false $apiResponse, string $targe
             $summary = "🎬 Deepfake 影片分析結果：\n\n";
             
             if ($deepfakeProb > $threshold) {
-                $summary .= "判斷結果：⚠️ 疑似 Deepfake 影片\n";
+                $summary .= "⚠️ 判斷為：疑似 Deepfake 影片\n";
                 $summary .= "(偵測到合成特徵的可能性為 {$percentage}%)";
             } else {
-                $summary .= "判斷結果：✅ 未檢測到明顯特徵\n";
+                $summary .= "✅ 判斷為：未檢測到明顯特徵\n";
                 $summary .= "(Deepfake 可能性較低，僅為 {$percentage}%)";
             }
 
@@ -195,6 +206,8 @@ function handle_video_analysis_response(string|false $apiResponse, string $targe
     }
     $bot->pushMessage($targetId, new TextMessageBuilder($followUpMessage));
 }
+
+// --- 以下維持原樣 ---
 
 $input = file_get_contents('php://input');
 $events = json_decode($input, true);
@@ -390,7 +403,5 @@ if (is_array($events) && !empty($events['events'])) {
         }
     }
 }
-
-http_response_code(200);
 echo 'OK';
 ?>
