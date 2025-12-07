@@ -263,7 +263,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const confidence = (aiData.result.confidence * 100).toFixed(1);
             let finalJudgement = '';
             let judgementClass = '';
-            if (label.toLowerCase() === 'ai') {
+            if (label.toLowerCase() === 'ai/deepfake' || label.toLowerCase() === 'ai') {
                 finalJudgement = `<strong>判斷結果：AI 生成 🤖</strong><p>此圖片有 ${confidence}% 的機率是由 AI 生成。</p>`;
                 judgementClass = 'rating-false';
             } else {
@@ -314,15 +314,19 @@ document.addEventListener('DOMContentLoaded', function() {
         } else if (data.status === 'success') {
             const deepfakeProb = data.deepfake?.prob || 0;
             const percentage = (deepfakeProb * 100).toFixed(1);
-            const threshold = 0.7;
+            
+            // 將門檻調整為 0.5 (50%)
+            const threshold = 0.5;
+            
             let finalJudgement = '';
             let judgementClass = '';
+            
             if (deepfakeProb > threshold) {
-                finalJudgement = `<strong>判斷結果：高機率為 Deepfake 影片 🚨</strong><p>偵測到 Deepfake 的可能性為 ${percentage}%。</p>`;
-                judgementClass = 'rating-false';
+                finalJudgement = `<strong>判斷結果：疑似 Deepfake 影片 ⚠️</strong><p>偵測到 Deepfake 的可能性為 ${percentage}%。</p>`;
+                judgementClass = 'rating-false'; // 紅色警戒
             } else {
                 finalJudgement = `<strong>判斷結果：未檢測到明顯 Deepfake 特徵 ✅</strong><p>偵測到 Deepfake 的可能性為 ${percentage}%。</p>`;
-                judgementClass = 'rating-true';
+                judgementClass = 'rating-true'; // 綠色安全
             }
             html += `<div class="result-display ${judgementClass}">${finalJudgement}</div>`;
         } else {
