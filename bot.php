@@ -51,7 +51,7 @@ function make_curl_request(string $url, array $postData = []): string|false {
     $ch = curl_init();
     curl_setopt($ch, CURLOPT_URL, $url);
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_TIMEOUT, 600); // 統一使用長超時
+    curl_setopt($ch, CURLOPT_TIMEOUT, 600); 
     $headers = ['ngrok-skip-browser-warning: true'];
     curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
     curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
@@ -122,7 +122,7 @@ function handle_image_analysis_response(string|false $apiResponse, string $targe
     } elseif (isset($aiData['status']) && $aiData['status'] === 'success') {
         $result = $aiData['result'];
         $confidence = round($result['confidence'] * 100);
-        if (strtolower($result['label']) === 'ai') {
+        if (strtolower($result['label']) === 'ai/deepfake' || strtolower($result['label']) === 'ai') {
             $ai_detection_message .= "判斷結果：AI 生成 🤖\n(有 {$confidence}% 的機率是由 AI 生成)";
         } else {
             $ai_detection_message .= "判斷結果：真人創作 ✅\n(有 {$confidence}% 的機率為真人創作)";
@@ -169,14 +169,24 @@ function handle_video_analysis_response(string|false $apiResponse, string $targe
             $followUpMessage = $errorMessage;
         } elseif (isset($data['status']) && $data['status'] === 'success') {
             $deepfakeProb = $data['deepfake']['prob'] ?? 0;
-            $threshold = 0.7;
+            $percentage = round($deepfakeProb * 100, 1);
             
-            $finalJudgement = ($deepfakeProb > $threshold)
-                ? "判斷結果：為Deepfake影片 🚨\n(高機率為 Deepfake 影片)"
-                : "判斷結果：不是Deepfake影片 ✅\n(未檢測到 Deepfake 特徵)";
+            // 將門檻調整為 0.5 (50%)
+            $threshold = 0.5;
             
             $summary = "🎬 Deepfake 影片分析結果：\n\n";
-            $summary .= $finalJudgement . "\n\n";
+            
+            if ($deepfakeProb > $threshold) {
+                $summary .= "判斷結果：⚠️ 疑似 Deepfake 影片\n";
+                $summary .= "(偵測到合成特徵的可能性為 {$percentage}%)";
+            } else {
+                $summary .= "判斷結果：✅ 未檢測到明顯特徵\n";
+                $summary .= "(Deepfake 可能性較低，僅為 {$percentage}%)";
+            }
+
+            if ($deepfakeProb > 0.4 && $deepfakeProb <= 0.5) {
+                $summary .= "\n\n💡 提示：數值接近警戒線，建議進一步查證來源。";
+            }
             
             $followUpMessage = $summary;
         } else {
@@ -195,7 +205,7 @@ if (is_array($events) && !empty($events['events'])) {
             $replyToken = $event['replyToken'];
             $source = $event['source'];
             $userId = $source['userId'];
-            $apiUrl = 'https://0f574bd01b41.ngrok-free.app/api.php';
+            $apiUrl = 'https://a9c5958fe6e2.ngrok-free.app/api.php';
             $userState = getUserState($userId);
             $targetId = $userId;
             if (isset($source['groupId'])) { $targetId = $source['groupId']; }
@@ -258,7 +268,7 @@ if (is_array($events) && !empty($events['events'])) {
                 }
                 
                 if ($trimmedUserMessage === '網站'|| $trimmedUserMessage === "web" || $trimmedUserMessage === "網址") {
-                    $bot->replyText($replyToken, 'https://0f574bd01b41.ngrok-free.app/');
+                    $bot->replyText($replyToken, 'https://a9c5958fe6e2.ngrok-free.app/');
                     continue;
                 }
 
