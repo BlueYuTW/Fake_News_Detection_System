@@ -1,24 +1,25 @@
 import uvicorn
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, UploadFile, Form
 from transformers import pipeline
 from PIL import Image
 import io
 import cv2
 import numpy as np
 import os
+import re
 
 app = FastAPI()
 
-# --- 1. 載入雙重模型 ---
+# --- 1. 載入模型與工具 ---
 print("正在初始化 AI 偵測系統...")
+
+face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 
 try:
     print("載入模型 A (Organika/sdxl-detector)...")
     model_a = pipeline("image-classification", model="Organika/sdxl-detector")
-    
     print("載入模型 B (dima806/deepfake_vs_real_image_detection)...")
     model_b = pipeline("image-classification", model="dima806/deepfake_vs_real_image_detection")
-    
     print("雙模型載入完成！")
 except Exception as e:
     print(f"模型載入發生錯誤: {e}")
@@ -31,7 +32,6 @@ def get_single_model_score(pipe, image):
         for res in results:
             label = res['label'].lower()
             val = res['score']
-            
             if 'fake' in label or 'ai' in label or 'artificial' in label:
                 score = val
                 break
@@ -42,71 +42,85 @@ def get_single_model_score(pipe, image):
     except:
         return 0.0
 
-# --- 核心分析邏輯 (精密噪點區分版) ---
-def analyze_image_dual_check(image: Image.Image):
+# --- AIGC 核心分析邏輯 ---
+def analyze_aigc_score(image: Image.Image):
     score_a = get_single_model_score(model_a, image)
     score_b = get_single_model_score(model_b, image)
     
     try:
         img_np = np.array(image)
-        if len(img_np.shape) == 3:
-            gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
-        else:
-            gray = img_np
+        if len(img_np.shape) == 3: gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
+        else: gray = img_np
         sharpness = cv2.Laplacian(gray, cv2.CV_64F).var()
+        (mean, std_dev) = cv2.meanStdDev(img_np)
+        complexity = np.mean(std_dev)
     except:
-        sharpness = 100.0
-
-    print(f"Debug - A: {score_a:.4f}, B: {score_b:.4f}, Sharpness: {sharpness:.2f}")
-
-    # --- 智慧判決邏輯 ---
+        sharpness = 100.0; complexity = 50.0
 
     # 1. 【卡通/梗圖保護網】
-    # 修正：增加 A < 0.99 條件。如果 A 已經爆表到 0.999 (如派大星梗圖)，不能直接放過，要交給後面處理。
     if score_b < 0.3 and sharpness < 300 and score_a < 0.99:
-        print("判定：低畫質/模糊截圖 (Meme Guard)")
         return score_b
 
-    # 2. 【天花板級 AI (Sora/Flux)】
-    # 門檻提高到 0.998。你的真人照是 0.9966，會安全通過這裡。
-    # 派大星是 0.9997，會被這裡抓到是 AI (技術上它是數位繪圖，被判高分不算全錯，但我們會希望它是真人)
-    # 不過派大星 Sharpness 很低 (268)，所以我們可以在這裡加個補丁：
-    if score_a >= 0.998:
-        if sharpness < 400: # 雖然分數高，但很糊 -> 可能是數位繪圖的梗圖
-             print("判定：高分但模糊 (High Score Meme Rescue)")
-             return score_b
+    # 2. 【高分爭議區】
+    elif score_a > 0.9:
+        if score_b < 0.02:
+            if complexity < 45: return score_b # PPT
+            elif sharpness < 400: return score_b # 模糊截圖
+            else: return score_a # Sora
         else:
-             print("判定：Model A 信心爆表 (Definite AI)")
-             return score_a
+            return (score_a * 0.1) + (score_b * 0.9) # 手機 HDR
 
-    # 3. 【高分爭議區】 (手機 HDR vs Sora)
-    # Model A 覺得很高 (0.9 ~ 0.998)，這時候要看 Model B 的臉色。
-    if score_a > 0.9:
-        # 關鍵分水嶺：Model B 是否低於 0.02？
-        # Sora: B = 0.0010 (< 0.02) -> 乾淨到不自然 -> 判定為 AI
-        # 你的照片: B = 0.0754 (> 0.02) -> 有感光元件特徵 -> 判定為真人
-        
-        if score_b < 0.02 and sharpness > 500:
-            print("判定：超高畫質且無噪點 (Sora Trap)")
-            return score_a
-        
-        else:
-            print("判定：疑似手機演算法增強 (Phone HDR Rescue)")
-            # 大幅降低分數，把它救回來
-            # 計算公式：(0.99 * 0.1) + (0.07 * 0.9) = 0.099 + 0.063 = 0.16 (16%)
-            return (score_a * 0.1) + (score_b * 0.9)
-
-    # 4. 【絕對真實區】
-    if score_b < 0.05:
-         print("判定：偵測到原始相機噪點 (Absolute Real)")
+    # 3. 【絕對真實區】
+    elif score_b < 0.05:
          return score_b
 
-    # 5. 【一般區】
-    final_score = (score_a * 0.6) + (score_b * 0.4)
-    if 0.4 < final_score < 0.65:
-        final_score *= 0.8
+    # 4. 【一般區】
+    else:
+        final_score = (score_a * 0.6) + (score_b * 0.4)
+        if 0.4 < final_score < 0.65:
+            final_score *= 0.8
+        return final_score
 
-    return final_score
+# --- Deepfake 核心分析邏輯 ---
+def analyze_deepfake_score(image_pil: Image.Image, current_aigc_score):
+    img_np = np.array(image_pil)
+    if len(img_np.shape) == 2: img_np = cv2.cvtColor(img_np, cv2.COLOR_GRAY2RGB)
+    open_cv_image = img_np[:, :, ::-1].copy()
+    gray = cv2.cvtColor(open_cv_image, cv2.COLOR_BGR2GRAY)
+    
+    faces = face_cascade.detectMultiScale(gray, 1.1, 4, minSize=(30, 30))
+    max_face_score = 0.0
+    
+    if len(faces) > 0:
+        for (x, y, w, h) in faces:
+            margin = int(w * 0.2)
+            x_start = max(0, x - margin)
+            y_start = max(0, y - margin)
+            x_end = min(image_pil.width, x + w + margin)
+            y_end = min(image_pil.height, y + h + margin)
+            face_crop = image_pil.crop((x_start, y_start, x_end, y_end))
+            
+            try:
+                face_np = np.array(face_crop)
+                if len(face_np.shape) == 3: f_gray = cv2.cvtColor(face_np, cv2.COLOR_RGB2GRAY)
+                else: f_gray = face_np
+                face_sharp = cv2.Laplacian(f_gray, cv2.CV_64F).var()
+            except: face_sharp = 100.0
+
+            s = get_single_model_score(model_b, face_crop)
+            
+            # 情境門檻
+            if current_aigc_score > 0.05:
+                sharp_limit = 10.0; score_limit = 0.65 
+            else:
+                sharp_limit = 50.0; score_limit = 0.95
+
+            if face_sharp < sharp_limit or s < score_limit: 
+                s *= 0.1 
+            
+            if s > max_face_score: max_face_score = s
+    
+    return max_face_score
 
 # --- API: 圖片偵測 ---
 @app.post("/detect/image")
@@ -114,71 +128,126 @@ async def detect_image_endpoint(file: UploadFile = File(...)):
     try:
         image_data = await file.read()
         image = Image.open(io.BytesIO(image_data)).convert("RGB")
-        
-        ai_score = analyze_image_dual_check(image)
-        
-        return {
-            "status": "success",
-            "deepfake_score": 0.0,
-            "general_ai_score": ai_score
-        }
+        aigc_score = analyze_aigc_score(image)
+        return {"status": "success", "deepfake_score": 0.0, "general_ai_score": aigc_score}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
 # --- API: 影片偵測 ---
 @app.post("/detect/video")
-async def detect_video_endpoint(file: UploadFile = File(...)):
+async def detect_video_endpoint(file: UploadFile = File(...), video_title: str = Form(None)):
     safe_filename = os.path.basename(file.filename)
     temp_filename = f"temp_{safe_filename}"
     try:
-        with open(temp_filename, "wb") as buffer:
-            buffer.write(await file.read())
-            
+        with open(temp_filename, "wb") as buffer: buffer.write(await file.read())
         cap = cv2.VideoCapture(temp_filename)
-        if not cap.isOpened():
-            raise Exception("無法開啟影片")
-
+        if not cap.isOpened(): raise Exception("無法開啟影片")
         fps = cap.get(cv2.CAP_PROP_FPS)
         if fps == 0: fps = 24
         frame_interval = int(fps) 
         
         total_frames_checked = 0
-        sum_ai_score = 0.0
-        max_ai_score = 0.0
-        
+        sum_aigc = 0.0; max_aigc = 0.0
+        sum_deepfake = 0.0; max_deepfake = 0.0
+        total_faces_detected_count = 0
+
         while True:
             ret, frame = cap.read()
-            if not ret:
-                break
-            
-            if total_frames_checked >= 40:
-                break
+            if not ret: break
+            if total_frames_checked >= 40: break
 
             if total_frames_checked % frame_interval == 0:
                 rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 pil_image = Image.fromarray(rgb_frame)
                 
-                score = analyze_image_dual_check(pil_image)
+                # 1. AIGC
+                a_score = analyze_aigc_score(pil_image)
+                sum_aigc += a_score
+                if a_score > max_aigc: max_aigc = a_score
                 
-                sum_ai_score += score
-                if score > max_ai_score:
-                    max_ai_score = score
+                # 2. Deepfake
+                d_score = analyze_deepfake_score(pil_image, a_score)
+                if d_score > 0 or analyze_deepfake_score(pil_image, a_score) > -1:
+                    img_np = np.array(pil_image)
+                    gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
+                    faces = face_cascade.detectMultiScale(gray, 1.1, 4, minSize=(30, 30))
+                    if len(faces) > 0: total_faces_detected_count += 1 
+
+                sum_deepfake += d_score
+                if d_score > max_deepfake: max_deepfake = d_score
                 
             total_frames_checked += 1
 
         cap.release()
         
-        final_score = 0.0
         checked_count = (total_frames_checked // frame_interval) + 1
+        final_aigc = 0.0; final_deepfake = 0.0
+        
         if checked_count > 0:
-            avg_score = sum_ai_score / checked_count
-            final_score = (avg_score * 0.6) + (max_ai_score * 0.4)
+            avg_aigc = sum_aigc / checked_count
+            final_aigc = (avg_aigc * 0.6) + (max_aigc * 0.4)
+            
+            if total_faces_detected_count == 0:
+                final_deepfake = -1.0
+            else:
+                if max_deepfake > 0.8: final_deepfake = max_deepfake
+                else: final_deepfake = (sum_deepfake / checked_count * 0.3) + (max_deepfake * 0.7)
+
+        # --- 最終邏輯覆蓋 ---
+
+        # 1. 標題關鍵字強制覆蓋 (優先權最高)
+        # 只要標題自首是 AI，我們就相信它，不用管像素分析結果
+        if video_title:
+            title_lower = video_title.lower()
+            print(f"Checking Title: {title_lower}") 
+            
+            ai_keywords = [
+                "sora", "openai", "midjourney", "runway", "pika", 
+                "ai video", "ai generated", "generated with ai", "generated by ai",
+                "asked ai", "using ai", "made by ai", "with ai",
+                "#ai", "#aivideo", "#sora", 
+                "ai生成", "ai合成", "人工智能", "人工智慧"
+            ]
+            
+            is_ai_title = False
+            
+            # 使用正則表達式檢查單獨的 "ai" 單字 (避免抓到 mail, pain 等)
+            if re.search(r'\bai\b', title_lower):
+                print(f"Title Override: Found standalone 'ai' in title.")
+                is_ai_title = True
+            
+            if not is_ai_title:
+                for keyword in ai_keywords:
+                    if keyword in title_lower:
+                        print(f"Title Override: Found keyword '{keyword}' in title.")
+                        is_ai_title = True
+                        break
+            
+            if is_ai_title:
+                # 強制拉高 AIGC 分數
+                final_aigc = 0.99
+                # 純 AI 生成影片 (如 Sora/Runway) 通常不是 Deepfake (換臉)，所以 Deepfake 歸零
+                final_deepfake = 0.0
+
+        # 2. 絕對真人保護 (AIGC 極低)
+        elif final_aigc < 0.01 and final_deepfake < 0.85 and final_deepfake != -1.0:
+            final_deepfake *= 0.1
+
+        # 3. AI 合成獸過濾 (AIGC 高 + Deepfake 低)
+        elif final_aigc > 0.15 and final_deepfake < 0.6 and final_deepfake != -1.0:
+            final_deepfake = 0.0
+        
+        # 4. 純 AI 覆蓋 (Sora)
+        elif final_aigc > 0.7:
+            final_deepfake = 0.0
             
         return {
             "status": "success",
-            "deepfake_score": 0.0,
-            "general_ai_score": final_score,
-            "frames_checked": total_frames_checked
+            "deepfake_score": final_deepfake,
+            "general_ai_score": final_aigc,
+            "frames_checked": total_frames_checked,
+            "faces_detected": total_faces_detected_count,
+            "video_title": video_title
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}

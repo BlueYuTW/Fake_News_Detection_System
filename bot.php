@@ -137,14 +137,12 @@ function handle_hot_topics_response(string|false $apiResponse, string $targetId,
     $msg = "🔥 最近 10 則熱門查核議題：\n";
     $i = 1;
     foreach ($data['hot_topics'] as $topic) {
-        // 簡短顯示標題，避免訊息太長
         $text = mb_substr($topic['claim_text'], 0, 30) . '...';
         $rating = $topic['rating'];
         $score = $topic['reliability_score'] ?? -1;
         
         $msg .= "\n{$i}. [{$rating}] {$text}";
         if ($score !== -1) {
-             // 簡單顯示分數
              $msg .= " (可信度:{$score}%)";
         }
         $i++;
@@ -153,9 +151,8 @@ function handle_hot_topics_response(string|false $apiResponse, string $targetId,
 
     $bot->pushMessage($targetId, new TextMessageBuilder($msg));
 }
-// ------------------------------
 
-// --- 修改：移除 Deepfake，只顯示 AI 生成 ---
+// --- 圖片分析結果 ---
 function handle_image_analysis_response(string|false $apiResponse, string $targetId, LINEBot $bot): void {
     if ($apiResponse === false) {
         $bot->pushMessage($targetId, new TextMessageBuilder("抱歉，圖片偵測服務暫時無法連線。"));
@@ -196,7 +193,7 @@ function handle_image_analysis_response(string|false $apiResponse, string $targe
     $bot->pushMessage($targetId, new TextMessageBuilder($msg));
 }
 
-// --- 修改：移除 Deepfake，只顯示 AI 生成 ---
+// --- 影片分析結果 ---
 function handle_video_analysis_response(string|false $apiResponse, string $targetId, LINEBot $bot): void {
     if ($apiResponse === false) {
         $bot->pushMessage($targetId, new TextMessageBuilder("抱歉，影片偵測服務暫時無法連線。"));
@@ -210,15 +207,30 @@ function handle_video_analysis_response(string|false $apiResponse, string $targe
     }
 
     $g_score = $data['general_ai_score'] ?? 0;
+    $d_score = $data['deepfake_score'] ?? 0;
+    
     $g_pct = round($g_score * 100, 1);
+    
+    // --- 修正：Deepfake 分數顯示邏輯 ---
+    $deepfake_text = "";
+    if ($d_score == -1.0) {
+        $deepfake_text = "⚠️ 未偵測到人臉 (無法分析)";
+    } else {
+        $d_pct = round($d_score * 100, 1);
+        $deepfake_text = "{$d_pct}%";
+    }
 
     $msg = "🎬 影片分析結果：\n\n";
     $msg .= "🤖 AI 生成指數: {$g_pct}%\n";
+    $msg .= "👤 Deepfake 換臉指數: {$deepfake_text}\n";
     
-    if ($g_score > 0.5) {
-        $msg .= "\n⚠️ 結論：疑似 AI 生成影片。";
+    // 結論判斷
+    if ($d_score > 0.5) {
+        $msg .= "\n⚠️ 結論：偵測到 Deepfake 換臉痕跡！";
+    } elseif ($g_score > 0.5) {
+        $msg .= "\n⚠️ 結論：疑似 AI 生成影片 (Sora/AI動畫)。";
     } else {
-        $msg .= "\n✅ 結論：未偵測到明顯 AI 特徵。";
+        $msg .= "\n✅ 結論：未偵測到明顯 AI/換臉特徵。";
     }
     
     $bot->pushMessage($targetId, new TextMessageBuilder($msg));
@@ -233,7 +245,7 @@ if (is_array($events) && !empty($events['events'])) {
             $replyToken = $event['replyToken'];
             $source = $event['source'];
             $userId = $source['userId'];
-            $apiUrl = 'https://b37a56729b1a.ngrok-free.app/api.php';
+            $apiUrl = 'https://266a2bd84df3.ngrok-free.app/api.php';
             $userState = getUserState($userId);
             $targetId = isset($source['groupId']) ? $source['groupId'] : $userId;
 
@@ -284,18 +296,18 @@ if (is_array($events) && !empty($events['events'])) {
                     continue;
                 }
                 if ($trimmedUserMessage === '網站') {
-                    $bot->replyText($replyToken, 'https://b37a56729b1a.ngrok-free.app/');
+                    $bot->replyText($replyToken, 'https://266a2bd84df3.ngrok-free.app/');
                     continue;
                 }
                 if (has_image_trigger($userMessage)) {
                     setUserState($userId, 'awaiting_image');
-                    $bot->replyText($replyToken, '請傳送圖片。或打「取消」來取消動作。');
+                    $bot->replyText($replyToken, '請傳送圖片。或輸入「取消」取消動作。');
                     continue;
                 }
                 
                 if (has_video_trigger($userMessage)) {
                     setUserState($userId, 'awaiting_video');
-                    $bot->replyText($replyToken, '請傳送影片或 YouTube 連結。或打「取消」來取消動作。');
+                    $bot->replyText($replyToken, '請傳送影片或 YouTube 連結。或輸入「取消」取消動作。');
                     continue;
                 }
 
@@ -311,7 +323,7 @@ if (is_array($events) && !empty($events['events'])) {
                     continue;
                 }
 
-                if ($trimmedUserMessage === '熱門議題' || $trimmedUserMessage === '熱門搜尋' || $trimmedUserMessage === '熱門') {
+                if ($trimmedUserMessage === '熱門議題') {
                     $bot->replyText($replyToken, '正在獲取熱門查核資料...');
                     $postData = ['action' => 'get_hot_searches'];
                     $apiResponse = make_curl_request($apiUrl, $postData);

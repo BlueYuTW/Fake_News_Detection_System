@@ -93,7 +93,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }).catch(e => resultsContainer.innerHTML = `<div class="error">${e.message}</div>`);
     };
 
-    // 統一顯示邏輯 (圖片/影片共用)
+    // --- 統一顯示邏輯 ---
     function showResult(d, type) {
         completeProgress();
         if (d.error) {
@@ -101,29 +101,48 @@ document.addEventListener('DOMContentLoaded', function() {
             return;
         }
 
-        // 只取得 General AI 分數
-        let general = 0;
-        if (type === 'image') {
-            general = d.ai_detection ? d.ai_detection.general_ai_score : 0;
-        } else {
-            general = d.general_ai_score;
-        }
-
+        // AIGC 分數
+        let general = d.general_ai_score || 0;
+        if (type === 'image' && d.ai_detection) general = d.ai_detection.general_ai_score;
         const g_pct = (general * 100).toFixed(1);
+        let g_class = general > 0.5 ? 'rating-false' : 'rating-true';
 
         let html = `<h3>${type === 'image' ? '🖼️ 圖片' : '🎬 影片'}分析結果</h3>`;
         
-        let g_class = general > 0.5 ? 'rating-false' : 'rating-true';
+        // 1. AIGC 顯示
         html += `
         <div class="result-display ${g_class}">
             <strong>🤖 AI 生成偵測 (AIGC)</strong>
             <div class="progress"><div style="width:${g_pct}%; background:${general > 0.5 ? '#e74c3c' : '#2ecc71'}"></div></div>
             <p>AI 生成可能性：${g_pct}%</p>
-        </div>
-        <p style="font-size: 0.9em; color: #666; margin-top: 5px;">(數值越低代表越像真實拍攝/手繪；數值越高代表越像 AI 生成)</p>
-        `;
+        </div>`;
 
-        // 圖片特有的 OCR 查核結果顯示
+        // 2. Deepfake 顯示
+        if (type === 'video') {
+            let deepfake = d.deepfake_score; 
+            
+            if (deepfake === -1.0) {
+                html += `
+                <div class="result-display rating-unknown" style="margin-top: 10px; background-color: #f8f9fa; border-left: 5px solid #95a5a6;">
+                    <strong>👤 Deepfake 換臉偵測</strong>
+                    <p style="color: #7f8c8d; font-weight: bold;">⚠️ 未偵測到清晰人臉 (可能因遮擋/墨鏡/側臉)</p>
+                </div>`;
+            } else {
+                const d_pct = (deepfake * 100).toFixed(1);
+                let d_class = deepfake > 0.5 ? 'rating-false' : 'rating-true';
+                
+                html += `
+                <div class="result-display ${d_class}" style="margin-top: 10px;">
+                    <strong>👤 Deepfake 換臉偵測</strong>
+                    <div class="progress"><div style="width:${d_pct}%; background:${deepfake > 0.5 ? '#e74c3c' : '#2ecc71'}"></div></div>
+                    <p>換臉可能性：${d_pct}%</p>
+                </div>`;
+            }
+        }
+
+        html += `<p style="font-size: 0.9em; color: #666; margin-top: 5px;">(數值越低代表越像真實拍攝；數值越高代表越像 AI/合成)</p>`;
+
+        // 圖片特有的 OCR 查核結果
         if (type === 'image' && d.fact_check) {
             if(d.fact_check.claims && d.fact_check.claims.length) {
                 html += '<hr><h4>🔍 圖片文字查核結果：</h4>';
@@ -164,6 +183,15 @@ document.addEventListener('DOMContentLoaded', function() {
 
     if(detectYtVideoBtn) detectYtVideoBtn.onclick = function() {
         const u = videoUrlInput.value.trim(); if(!u) return;
+        
+        // --- YouTube 網址驗證 ---
+        const youtubeRegex = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\/.+$/;
+        if (!youtubeRegex.test(u)) {
+            alert("⚠️ 請輸入有效的 YouTube 影片網址！\n(不支援 Instagram, Facebook 或 TikTok 連結)");
+            return;
+        }
+        // -----------------------------
+
         startProgressSimulation();
         const fd = new FormData(); fd.append('action','detect_yt_video'); fd.append('video_url',u);
         fetch('api.php', {method:'POST', body:fd}).then(r=>r.json()).then(d=>showResult(d, 'video')).catch(e=>{

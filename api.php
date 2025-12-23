@@ -3,7 +3,7 @@ ob_start();
 
 ini_set('display_errors', 0); 
 error_reporting(E_ALL);
-set_time_limit(300); 
+set_time_limit(600); 
 ini_set('memory_limit', '512M'); 
 
 header('Content-Type: application/json; charset=utf-8');
@@ -29,10 +29,8 @@ const LOCAL_AI_SERVER = 'http://127.0.0.1:8000';
 
 try {
 
-    // --- 新增：評分計算邏輯 (讓 API 直接回傳分數) ---
     function calculate_reliability_score($ratingText) {
         $rating = mb_strtolower($ratingText);
-        // 定義關鍵字與對應分數 (0 = 完全錯誤, 100 = 完全正確)
         if (preg_match('/(錯誤|不實|假|謠言|虚假|false|incorrect|fake)/u', $rating)) {
             return ['score' => 0, 'label' => '❌ 高度風險 (內容不實)'];
         }
@@ -47,25 +45,16 @@ try {
 
     function compress_image($source_path, $destination_path, $quality = 85, $max_width = 1500) {
         if (!file_exists($source_path)) return false;
-        
-        // 檢查 GD 庫
         if (!function_exists('imagecreatetruecolor')) {
             return copy($source_path, $destination_path) ? $destination_path : false;
         }
-
         $info = @getimagesize($source_path);
         if ($info === false) return false;
-        
         list($width, $height) = $info;
-        if ($width * $height > 10000000) { 
-             ini_set('memory_limit', '1024M');
-        }
-
+        if ($width * $height > 10000000) { ini_set('memory_limit', '1024M'); }
         if ($width > $max_width) { $new_width = $max_width; $new_height = (int)($height * ($new_width / $width)); } else { $new_width = $width; $new_height = $height; }
-        
         $thumb = imagecreatetruecolor($new_width, $new_height);
         $image = null;
-        
         try {
             switch ($info['mime']) { 
                 case 'image/jpeg': $image = imagecreatefromjpeg($source_path); break; 
@@ -73,10 +62,7 @@ try {
                 case 'image/gif': $image = imagecreatefromgif($source_path); break; 
                 default: return false; 
             }
-        } catch (Throwable $t) {
-            return false;
-        }
-
+        } catch (Throwable $t) { return false; }
         if (!$image) return false;
         imagecopyresampled($thumb, $image, 0, 0, 0, 0, $new_width, $new_height, $width, $height);
         $success = false;
@@ -85,20 +71,14 @@ try {
             case 'image/png': $success = imagepng($thumb, $destination_path, 7); break; 
             case 'image/gif': $success = imagegif($thumb, $destination_path); break; 
         }
-        
-        // --- 修正：正確釋放記憶體的語法 ---
-        if($thumb) ($thumb); 
-        if($image) ($image);
-        
+        if($thumb) ($thumb); if($image) ($image);
         return $success ? $destination_path : false;
     }
 
     function check_url_existence(string $url): bool { 
         $ch = curl_init($url); curl_setopt($ch, CURLOPT_RETURNTRANSFER, true); curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true); curl_setopt($ch, CURLOPT_NOBODY, true); curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 10); curl_setopt($ch, CURLOPT_TIMEOUT, 15); curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false); curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false); 
-        curl_exec($ch); 
-        if (curl_errno($ch)) { ($ch); return false; } 
-        $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE); 
-        ($ch); 
+        curl_exec($ch); if (curl_errno($ch)) { ($ch); return false; } 
+        $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE); ($ch); 
         return ($http_code < 400); 
     }
 
@@ -108,8 +88,6 @@ try {
         $response = curl_exec($ch); $http_status = curl_getinfo($ch, CURLINFO_HTTP_CODE); ($ch); 
         if ($http_status !== 200) { return ['error' => 'Google FactCheck API Error']; } 
         $decoded = json_decode($response, true);
-        
-        // 注入分數計算
         if (is_array($decoded) && isset($decoded['claims'])) {
             foreach ($decoded['claims'] as &$claim) {
                 if (isset($claim['claimReview'][0]['textualRating'])) {
@@ -119,7 +97,6 @@ try {
                 }
             }
         }
-
         return is_array($decoded) ? $decoded : ['error' => 'Invalid JSON from Google']; 
     }
 
@@ -137,28 +114,28 @@ try {
         return ['safe' => true]; 
     }
 
-    function call_hybrid_ai_detection(string $endpoint, string $filePath): array {
+    function call_hybrid_ai_detection(string $endpoint, string $filePath, string $videoTitle = ''): array {
         $ch_local = curl_init();
         curl_setopt($ch_local, CURLOPT_URL, LOCAL_AI_SERVER . $endpoint);
         curl_setopt($ch_local, CURLOPT_POST, true);
         curl_setopt($ch_local, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch_local, CURLOPT_POSTFIELDS, ['file' => new CURLFile($filePath)]);
-        curl_setopt($ch_local, CURLOPT_TIMEOUT, 120);
         
-        $res_local = curl_exec($ch_local); 
-        $http_code = curl_getinfo($ch_local, CURLINFO_HTTP_CODE);
-        $curl_error = curl_error($ch_local);
-        ($ch_local);
-
-        if ($curl_error) {
-            return ['error' => 'CURL Error: ' . $curl_error];
+        $postFields = ['file' => new CURLFile($filePath)];
+        if (!empty($videoTitle)) {
+            // 確保標題是 UTF-8，避免 Python 接收錯誤
+            if (!mb_check_encoding($videoTitle, 'UTF-8')) {
+                $videoTitle = mb_convert_encoding($videoTitle, 'UTF-8', 'auto');
+            }
+            $postFields['video_title'] = $videoTitle;
         }
-
+        
+        curl_setopt($ch_local, CURLOPT_POSTFIELDS, $postFields);
+        curl_setopt($ch_local, CURLOPT_TIMEOUT, 120);
+        $res_local = curl_exec($ch_local); $http_code = curl_getinfo($ch_local, CURLINFO_HTTP_CODE); $curl_error = curl_error($ch_local); ($ch_local);
+        if ($curl_error) return ['error' => 'CURL Error: ' . $curl_error];
         if ($http_code === 200 && $res_local) {
             $decoded = json_decode($res_local, true);
-            if (json_last_error() !== JSON_ERROR_NONE) {
-                return ['error' => 'Python JSON Parse Error', 'raw' => $res_local];
-            }
+            if (json_last_error() !== JSON_ERROR_NONE) return ['error' => 'Python JSON Parse Error', 'raw' => $res_local];
             return $decoded;
         }
         return ['error' => 'AI Server Connect Failed (HTTP ' . $http_code . ')'];
@@ -181,28 +158,75 @@ try {
         return ['status' => 'error', 'message' => 'OCR Failed'];
     }
 
+    // --- 修改：抓取標題並傳送 (強制編碼轉換) ---
     function analyze_youtube_video(string $ytUrl): array { 
         if (!file_exists(YT_DLP_PATH)) return ['error' => 'yt-dlp not found']; 
         if (!file_exists(FFMPEG_EXE_PATH)) return ['error' => 'ffmpeg not found']; 
-        $uploadDir = 'uploads/'; if (!is_dir($uploadDir)) mkdir($uploadDir, 0777, true); 
-        $uniqueId = uniqid('yt_', true); 
-        $finalFilePath = $uploadDir . $uniqueId . '.mp4'; 
         
-        $cmd = sprintf('"%s" -f "worstvideo[height>=360][ext=mp4]+bestaudio/best[ext=mp4]/best" --output "%s.%%(ext)s" %s', YT_DLP_PATH, $uploadDir . $uniqueId, escapeshellarg($ytUrl)); 
+        $uploadDir = 'uploads/'; 
+        if (!is_dir($uploadDir)) mkdir($uploadDir, 0777, true); 
+        
+        $uniqueId = uniqid('yt_', true); 
+        $outputTemplate = $uploadDir . $uniqueId . '.%(ext)s';
+        $finalFilePath = $uploadDir . $uniqueId . '.mp4'; 
+        $ffmpegDir = dirname(FFMPEG_EXE_PATH);
+        
+        // 1. 抓取標題 (使用 --dump-json)
+        $titleCmd = sprintf(
+            '"%s" --extractor-args "youtube:player_client=android" --dump-json --no-warnings --no-check-certificate %s',
+            YT_DLP_PATH,
+            escapeshellarg($ytUrl)
+        );
+        
+        // 注意：Windows shell_exec 可能回傳 Big5，這裡需要轉換
+        $jsonOutput = shell_exec($titleCmd);
+        $videoTitle = "";
+        
+        if ($jsonOutput) {
+            // 嘗試偵測編碼並轉為 UTF-8
+            $encoding = mb_detect_encoding($jsonOutput, ['UTF-8', 'BIG5', 'CP950', 'ASCII'], true);
+            if ($encoding != 'UTF-8') {
+                $jsonOutput = mb_convert_encoding($jsonOutput, 'UTF-8', $encoding);
+            }
+            
+            $jsonData = json_decode($jsonOutput, true);
+            if (isset($jsonData['title'])) {
+                $videoTitle = $jsonData['title'];
+            }
+        }
+
+        // 2. 下載影片
+        $cmd = sprintf(
+            '"%s" --ffmpeg-location "%s" --extractor-args "youtube:player_client=android" -f "best[ext=mp4]/best" --recode-video mp4 --output "%s" --no-check-certificate --no-playlist %s', 
+            YT_DLP_PATH, 
+            $ffmpegDir,
+            $outputTemplate, 
+            escapeshellarg($ytUrl)
+        ); 
         shell_exec($cmd . ' 2>&1'); 
         
         $tempFiles = glob($uploadDir . $uniqueId . '.*'); 
-        $downloadedVideo = ''; 
-        foreach($tempFiles as $f) { if (pathinfo($f, PATHINFO_EXTENSION) == 'mp4') { $downloadedVideo = $f; break; } } 
-        if(!$downloadedVideo && !empty($tempFiles)) $downloadedVideo = $tempFiles[0]; 
-        if($downloadedVideo) { 
-            if(pathinfo($downloadedVideo, PATHINFO_EXTENSION) != 'mp4') { shell_exec(sprintf('"%s" -i "%s" -c:v copy -c:a aac -y "%s"', FFMPEG_EXE_PATH, $downloadedVideo, $finalFilePath)); } else { rename($downloadedVideo, $finalFilePath); } 
+        if (empty($tempFiles)) {
+            return ['error' => 'Download Failed: No file created.'];
+        }
+        
+        $downloadedVideo = $tempFiles[0];
+        if (pathinfo($downloadedVideo, PATHINFO_EXTENSION) != 'mp4') { 
+            $convertCmd = sprintf('"%s" -i "%s" -c:v libx264 -c:a aac -preset ultrafast -y "%s"', FFMPEG_EXE_PATH, $downloadedVideo, $finalFilePath);
+            shell_exec($convertCmd . ' 2>&1');
+            @unlink($downloadedVideo);
+        } else { 
+            rename($downloadedVideo, $finalFilePath); 
         } 
-        if(!file_exists($finalFilePath)) { foreach($tempFiles as $f) @unlink($f); return ['error' => 'Download Failed']; } 
         
-        $res = call_hybrid_ai_detection('/detect/video', $finalFilePath); 
+        if (!file_exists($finalFilePath) || filesize($finalFilePath) < 1024) { 
+            return ['error' => 'Download Failed: Conversion failed.']; 
+        } 
         
-        foreach($tempFiles as $f) @unlink($f); @unlink($finalFilePath); return $res; 
+        // 3. 呼叫 AI
+        $res = call_hybrid_ai_detection('/detect/video', $finalFilePath, $videoTitle); 
+        @unlink($finalFilePath); 
+        return $res; 
     }
 
     $action = $_POST['action'] ?? 'search';
@@ -213,13 +237,11 @@ try {
             $conn = new mysqli(DB_HOST, DB_USER, DB_PASS, DB_NAME);
             if ($conn->connect_error) { $final_response = ['error' => 'DB Error: ' . $conn->connect_error]; break; }
             $conn->set_charset("utf8mb4");
-            // 建議改為 ORDER BY retrieved_at DESC (如果資料庫有該欄位)，若無則維持 id DESC
             $sql = "SELECT claim_text, claimant, rating, url FROM fact_check_cache ORDER BY id DESC LIMIT 10";
             $result = $conn->query($sql);
             $hot_topics = []; 
             if ($result) { 
                 while($row = $result->fetch_assoc()) {
-                    // 對熱門搜尋也加入評分
                     $scoreData = calculate_reliability_score($row['rating']);
                     $row['reliability_score'] = $scoreData['score'];
                     $row['risk_label'] = $scoreData['label'];
@@ -236,15 +258,10 @@ try {
         case 'detect_image':
             $imageFile = $_FILES['image_file'] ?? null;
             if (!$imageFile || $imageFile['error'] !== UPLOAD_ERR_OK) { $final_response = ['error' => 'Upload Failed']; break; }
-            
             $uploadDir = 'uploads/'; if (!is_dir($uploadDir)) mkdir($uploadDir, 0777, true);
             $originalFilePath = $uploadDir . uniqid('img_orig_', true) . '.' . pathinfo($imageFile['name'], PATHINFO_EXTENSION);
-            if (!move_uploaded_file($imageFile['tmp_name'], $originalFilePath)) {
-                $final_response = ['error' => 'Failed to move uploaded file']; break;
-            }
-
+            move_uploaded_file($imageFile['tmp_name'], $originalFilePath);
             $ai_result = call_hybrid_ai_detection('/detect/image', $originalFilePath);
-
             $ocrFileToProcess = $originalFilePath;
             $compressedFilePath = null;
             if (filesize($originalFilePath) > 1024 * 1024) {
@@ -258,7 +275,6 @@ try {
                  }
             }
             $ocr_result = call_hybrid_ocr($ocrFileToProcess);
-
             $fact_check_result = [];
             if (isset($ocr_result['status']) && $ocr_result['status'] === 'success') {
                 if (!empty($ocr_result['text'])) {
@@ -275,14 +291,8 @@ try {
             } else { 
                 $fact_check_result = ['error' => $ocr_result['message'] ?? 'OCR Failed']; 
             }
-
-            $final_response = [
-                'ai_detection' => $ai_result, 
-                'fact_check' => $fact_check_result
-            ];
-            
-            @unlink($originalFilePath); 
-            if ($compressedFilePath) @unlink($compressedFilePath); 
+            $final_response = ['ai_detection' => $ai_result, 'fact_check' => $fact_check_result];
+            @unlink($originalFilePath); if ($compressedFilePath) @unlink($compressedFilePath); 
             break;
 
         case 'detect_yt_video':
@@ -295,9 +305,7 @@ try {
             $uploadDir = 'uploads/'; if (!is_dir($uploadDir)) mkdir($uploadDir, 0777, true);
             $filePath = $uploadDir . uniqid('vid_', true) . '.' . pathinfo($videoFile['name'], PATHINFO_EXTENSION);
             move_uploaded_file($videoFile['tmp_name'], $filePath);
-            
             $final_response = call_hybrid_ai_detection('/detect/video', $filePath);
-            
             @unlink($filePath); break;
 
         case 'search':
