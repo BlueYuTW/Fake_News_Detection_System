@@ -21,9 +21,9 @@ function call_google_factcheck_for_update($query) {
     ]);
     $ch = curl_init();
     curl_setopt_array($ch, [
-        CURLOPT_URL => $url, 
-        CURLOPT_RETURNTRANSFER => true, 
-        CURLOPT_SSL_VERIFYPEER => false, 
+        CURLOPT_URL => $url,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_SSL_VERIFYPEER => false,
         CURLOPT_TIMEOUT => 30
     ]);
     $response = curl_exec($ch);
@@ -43,7 +43,7 @@ while (true) {
     if ($conn->connect_error) {
         echo "資料庫連線失敗: " . $conn->connect_error . "\n";
         // 如果連線失敗，等待 1 分鐘後重試。
-        sleep(60); 
+        sleep(60);
         continue;
     }
     $conn->set_charset("utf8mb4");
@@ -84,7 +84,7 @@ while (true) {
             }
         }
         // 避免 API 請求過於頻繁
-        sleep(2); 
+        sleep(2);
     }
 
     // 2. 一次性寫入資料庫
