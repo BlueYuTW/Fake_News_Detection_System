@@ -144,7 +144,7 @@ async def detect_video_endpoint(file: UploadFile = File(...), video_title: str =
         if not cap.isOpened(): raise Exception("無法開啟影片")
         fps = cap.get(cv2.CAP_PROP_FPS)
         if fps == 0: fps = 24
-        frame_interval = int(fps) 
+        frame_interval = int(fps) # 每秒取一幀
         
         total_frames_checked = 0
         sum_aigc = 0.0; max_aigc = 0.0
@@ -154,7 +154,7 @@ async def detect_video_endpoint(file: UploadFile = File(...), video_title: str =
         while True:
             ret, frame = cap.read()
             if not ret: break
-            if total_frames_checked >= 40: break
+            if total_frames_checked >= 40: break # 最多檢查 40 幀
 
             if total_frames_checked % frame_interval == 0:
                 rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
